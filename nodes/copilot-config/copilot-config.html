@@ -1,0 +1,69 @@
+<script type="text/javascript">
+    RED.nodes.registerType('copilot-config', {
+        category: 'config',
+        defaults: {
+            name: { value: '' },
+            authMethod: { value: 'oauth' },
+            cliPath: { value: '' },
+            cliUrl: { value: '' },
+        },
+        credentials: {
+            githubToken: { type: 'password' },
+        },
+        label: function () {
+            return this.name || 'GitHub Copilot';
+        },
+        oneditprepare: function () {
+            function toggleTokenField() {
+                const method = $('#node-config-input-authMethod').val();
+                $('#copilot-token-row').toggle(method === 'token');
+            }
+            $('#node-config-input-authMethod').on('change', toggleTokenField);
+            toggleTokenField();
+        },
+    });
+</script>
+
+<script type="text/html" data-template-name="copilot-config">
+    <div class="form-row">
+        <label for="node-config-input-name"><i class="fa fa-tag"></i> Name</label>
+        <input type="text" id="node-config-input-name" placeholder="GitHub Copilot">
+    </div>
+    <div class="form-row">
+        <label for="node-config-input-authMethod"><i class="fa fa-lock"></i> Auth</label>
+        <select id="node-config-input-authMethod">
+            <option value="oauth">GitHub OAuth (logged-in user)</option>
+            <option value="token">Personal Access Token</option>
+        </select>
+    </div>
+    <div class="form-row" id="copilot-token-row">
+        <label for="node-config-input-githubToken"><i class="fa fa-key"></i> Token</label>
+        <input type="password" id="node-config-input-githubToken" placeholder="ghp_...">
+    </div>
+    <div class="form-row">
+        <label for="node-config-input-cliPath"><i class="fa fa-terminal"></i> CLI Path</label>
+        <input type="text" id="node-config-input-cliPath" placeholder="(optional) /path/to/copilot">
+    </div>
+    <div class="form-row">
+        <label for="node-config-input-cliUrl"><i class="fa fa-link"></i> CLI URL</label>
+        <input type="text" id="node-config-input-cliUrl" placeholder="(optional) localhost:8080">
+    </div>
+</script>
+
+<script type="text/html" data-help-name="copilot-config">
+    <p>Configuration node for GitHub Copilot.</p>
+    <h3>Properties</h3>
+    <dl class="message-properties">
+        <dt>Auth <span class="property-type">select</span></dt>
+        <dd>
+            <b>GitHub OAuth</b> — uses credentials stored by the Copilot CLI (<code>gh auth login</code>). No token needed.<br>
+            <b>Personal Access Token</b> — fallback for environments where OAuth isn't set up.
+        </dd>
+        <dt>Token <span class="property-type">password</span></dt>
+        <dd>Required when Auth is set to <em>Personal Access Token</em>. Stored as a credential and never sent to the browser.</dd>
+        <dt>CLI Path <span class="property-type">string</span></dt>
+        <dd>Optional override for the <code>copilot</code> CLI binary. Defaults to the bundled binary in <code>node_modules</code>.</dd>
+        <dt>CLI URL <span class="property-type">string</span></dt>
+        <dd>Optional URL of an existing Copilot CLI server (e.g. <code>localhost:8080</code>). When set, no CLI process is spawned.</dd>
+    </dl>
+</script>

@@ -1,0 +1,128 @@
+<script type="text/javascript">
+    RED.nodes.registerType('copilot-prompt', {
+        category: 'ai',
+        color: '#e8dff5',
+        defaults: {
+            name: { value: '' },
+            copilotConfig: { value: '', type: 'copilot-config', required: true },
+            model: { value: '' },
+            reasoningEffort: { value: '' },
+            timeout: { value: 60000 },
+        },
+        inputs: 1,
+        outputs: 2,
+        outputLabels: ['response', 'error'],
+        icon: 'copilot.svg',
+        label: function () {
+            return this.name || 'copilot';
+        },
+        paletteLabel: 'copilot',
+        oneditprepare: function () {
+            const nodeId = this.id;
+            const savedModel = this.model;
+
+            function loadModels(configId) {
+                if (!configId) return;
+                const $select = $('#node-input-model');
+                $select.empty().append($('<option>', { value: '', text: '— loading… —', disabled: true, selected: true }));
+                $.getJSON(`copilot/models?configId=${encodeURIComponent(configId)}`)
+                    .done(function (models) {
+                        $select.empty();
+                        $select.append($('<option>', { value: '', text: '— select model —' }));
+                        models.forEach(function (m) {
+                            const cost = m.multiplier != null ? `(${m.multiplier}x)` : '';
+                            $select.append($('<option>', { value: m.id, text: `${m.id} ${cost}`.trim() }));
+                        });
+                        if (savedModel) $select.val(savedModel);
+                        if (!$select.val()) $select.prop('selectedIndex', 0);
+                    })
+                    .fail(function () {
+                        $select.empty().append($('<option>', { value: savedModel || '', text: savedModel || '— unable to load —' }));
+                    });
+            }
+
+            // Load models whenever the config node selection changes
+            $('#node-input-copilotConfig').on('change', function () {
+                loadModels($(this).val());
+            });
+
+            // Initial load using the already-selected config node
+            loadModels($('#node-input-copilotConfig').val());
+        },
+    });
+</script>
+
+<script type="text/html" data-template-name="copilot-prompt">
+    <div class="form-row">
+        <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+        <input type="text" id="node-input-name" placeholder="copilot">
+    </div>
+    <div class="form-row">
+        <label for="node-input-copilotConfig"><i class="fa fa-cog"></i> Config</label>
+        <input type="text" id="node-input-copilotConfig">
+    </div>
+    <div class="form-row">
+        <label for="node-input-model"><i class="fa fa-microchip"></i> Model</label>
+        <select id="node-input-model" style="width:70%">
+            <option value="">— select a config first —</option>
+        </select>
+    </div>
+    <div class="form-row">
+        <label for="node-input-reasoningEffort"><i class="fa fa-brain"></i> Reasoning</label>
+        <select id="node-input-reasoningEffort">
+            <option value="">— default —</option>
+            <option value="low">low</option>
+            <option value="medium">medium</option>
+            <option value="high">high</option>
+            <option value="xhigh">xhigh</option>
+        </select>
+    </div>
+    <div class="form-row">
+        <label for="node-input-timeout"><i class="fa fa-clock-o"></i> Timeout (ms)</label>
+        <input type="number" id="node-input-timeout" placeholder="60000" min="1000">
+    </div>
+</script>
+
+<script type="text/html" data-help-name="copilot-prompt">
+    <p>Send a prompt (with optional attachments) to GitHub Copilot and receive a response.</p>
+
+    <h3>Inputs</h3>
+    <dl class="message-properties">
+        <dt>payload <span class="property-type">string | object</span></dt>
+        <dd>
+            A plain string is used as the prompt.<br>
+            An object may contain <code>{ prompt, attachments }</code>.
+        </dd>
+        <dt class="optional">attachments <span class="property-type">array</span></dt>
+        <dd>
+            Array of attachment descriptors. Each may be:<br>
+            <code>{ type: "file", path: "/abs/path" }</code><br>
+            <code>{ type: "base64", data: "...", name: "img.jpg" }</code><br>
+            <code>{ type: "buffer", data: Buffer, name: "file.bin" }</code>
+        </dd>
+        <dt class="optional">model <span class="property-type">string</span></dt>
+        <dd>Override the model for this message (e.g. <code>"gpt-5"</code>).</dd>
+    </dl>
+
+    <h3>Outputs</h3>
+    <ol class="node-ports">
+        <li>Response
+            <dl class="message-properties">
+                <dt>payload <span class="property-type">string</span></dt>
+                <dd>The assistant's response text.</dd>
+                <dt>sessionId <span class="property-type">string</span></dt>
+                <dd>The Copilot session ID.</dd>
+                <dt>events <span class="property-type">array</span></dt>
+                <dd>All session events emitted during the request.</dd>
+            </dl>
+        </li>
+        <li>Error
+            <dl class="message-properties">
+                <dt>payload <span class="property-type">string</span></dt>
+                <dd>Error message.</dd>
+                <dt>error <span class="property-type">Error</span></dt>
+                <dd>The error object.</dd>
+            </dl>
+        </li>
+    </ol>
+</script>
