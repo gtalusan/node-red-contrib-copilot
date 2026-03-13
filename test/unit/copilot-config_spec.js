@@ -85,29 +85,29 @@ describe('copilot-config node', function () {
         });
     });
 
-    it('getClient() ignores a stored token when authMethod is oauth', function (done) {
+    it('getClient() uses a stored credential token when authMethod is oauth', function (done) {
         buildMockInstance();
-        // Even if a token credential exists, oauth mode must NOT pass it to the SDK
+        // Token stored from a prior OAuth flow — should be passed to the SDK
         const flow = [{ id: 'cfg1', type: 'copilot-config', authMethod: 'oauth' }];
-        helper.load(copilotConfigModule, flow, { cfg1: { githubToken: 'ghp_shouldbeignored' } }, async function () {
+        helper.load(copilotConfigModule, flow, { cfg1: { githubToken: 'gho_fromOAuthFlow' } }, async function () {
             const n = helper.getNode('cfg1');
             await n.getClient();
             const opts = mockState.constructorArgs[0];
-            opts.should.have.property('useLoggedInUser', true);
-            opts.should.not.have.property('githubToken');
+            opts.should.have.property('githubToken', 'gho_fromOAuthFlow');
+            opts.should.have.property('useLoggedInUser', false);
             done();
         });
     });
 
-    it('getClient() falls back to oauth when authMethod is token but no token is provided', function (done) {
+    it('getClient() uses useLoggedInUser=false when authMethod is token but no token is provided', function (done) {
         buildMockInstance();
         const flow = [{ id: 'cfg1', type: 'copilot-config', authMethod: 'token' }];
-        // No credentials provided — should gracefully fall back to oauth
+        // No credentials — token mode without a token: no auth attempted
         helper.load(copilotConfigModule, flow, {}, async function () {
             const n = helper.getNode('cfg1');
             await n.getClient();
             const opts = mockState.constructorArgs[0];
-            opts.should.have.property('useLoggedInUser', true);
+            opts.should.have.property('useLoggedInUser', false);
             opts.should.not.have.property('githubToken');
             done();
         });
@@ -271,6 +271,86 @@ describe('copilot-config node', function () {
                                 done();
                             });
                     });
+            });
+        });
+    });
+
+    describe('POST /copilot/auth/start and GET /copilot/auth/poll', function () {
+        // Build a mock _httpPost.fn that returns deviceCodeResponse on the first call,
+        // then cycles through tokenResponses for subsequent (polling) calls.
+        function buildHttpPostMock(deviceCodeResponse, tokenResponses) {
+            let callCount = 0;
+            return function mockHttpPost(_url, _params) {
+                const idx = callCount++;
+                if (idx === 0) return Promise.resolve(deviceCodeResponse);
+                const resp = tokenResponses[idx - 1] || { error: 'expired_token', error_description: 'expired' };
+                return Promise.resolve(resp);
+            };
+        }
+
+        const DEVICE_CODE_RESP = {
+            device_code: 'dev_code_abc',
+            user_code: 'AB12-CD34',
+            verification_uri: 'https://github.com/login/device',
+            interval: 0,
+            expires_in: 900,
+        };
+
+        beforeEach(function () { buildMockInstance(); });
+
+        it('start returns sessionId, url and code from GitHub device code response', function (done) {
+            copilotConfigModule._httpPost.fn = buildHttpPostMock(DEVICE_CODE_RESP, []);
+
+            const flow = [{ id: 'cfg1', type: 'copilot-config', authMethod: 'oauth' }];
+            helper.load(copilotConfigModule, flow, {}, function () {
+                helper.request()
+                    .post('/copilot/auth/start')
+                    .send({ nodeId: 'cfg1' })
+                    .expect(200)
+                    .end(function (err, res) {
+                        if (err) return done(err);
+                        res.body.should.have.property('url', 'https://github.com/login/device');
+                        res.body.should.have.property('code', 'AB12-CD34');
+                        res.body.should.have.property('sessionId').which.is.a.String();
+                        done();
+                    });
+            });
+        });
+
+        it('poll returns done:true once background token poll receives an access_token', function (done) {
+            copilotConfigModule._httpPost.fn = buildHttpPostMock(DEVICE_CODE_RESP, [
+                { error: 'authorization_pending' },
+                { access_token: 'gho_test_token' },
+            ]);
+
+            const flow = [{ id: 'cfg1', type: 'copilot-config', authMethod: 'oauth' }];
+            helper.load(copilotConfigModule, flow, {}, function () {
+                helper.request().post('/copilot/auth/start').send({ nodeId: 'cfg1' }).end(function (err, startRes) {
+                    if (err) return done(err);
+                    const sessionId = startRes.body.sessionId;
+                    // Wait for the async polling loop to complete (interval=0 → near-instant)
+                    setTimeout(function () {
+                        helper.request()
+                            .get('/copilot/auth/poll/' + sessionId)
+                            .expect(200)
+                            .end(function (err2, pollRes) {
+                                if (err2) return done(err2);
+                                pollRes.body.should.have.property('done', true);
+                                pollRes.body.should.have.property('error', null);
+                                done();
+                            });
+                    }, 100);
+                });
+            });
+        });
+
+        it('poll returns 404 for unknown sessionId', function (done) {
+            copilotConfigModule._httpPost.fn = buildHttpPostMock(DEVICE_CODE_RESP, []);
+            const flow = [{ id: 'cfg1', type: 'copilot-config', authMethod: 'oauth' }];
+            helper.load(copilotConfigModule, flow, {}, function () {
+                helper.request()
+                    .get('/copilot/auth/poll/doesnotexist')
+                    .expect(404, done);
             });
         });
     });

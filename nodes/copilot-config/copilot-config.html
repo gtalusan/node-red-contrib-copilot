@@ -1,3 +1,8 @@
+<style>
+    #copilot-oauth-status.copilot-oauth-ok  { color: #3d7a3d; }
+    #copilot-oauth-status.copilot-oauth-err { color: #c0392b; }
+</style>
+
 <script type="text/javascript">
     RED.nodes.registerType('copilot-config', {
         category: 'config',
@@ -14,12 +19,64 @@
             return this.name || 'GitHub Copilot';
         },
         oneditprepare: function () {
-            function toggleTokenField() {
+            const nodeId = this.id;
+
+            function toggleAuthUI() {
                 const method = $('#node-config-input-authMethod').val();
                 $('#copilot-token-row').toggle(method === 'token');
+                $('#copilot-oauth-row').toggle(method === 'oauth');
             }
-            $('#node-config-input-authMethod').on('change', toggleTokenField);
-            toggleTokenField();
+            $('#node-config-input-authMethod').on('change', toggleAuthUI);
+            toggleAuthUI();
+
+            $('#copilot-oauth-connect').on('click', function () {
+                const btn = $(this);
+                btn.prop('disabled', true).text('Starting…');
+                $('#copilot-oauth-status').text('').removeClass('copilot-oauth-ok copilot-oauth-err');
+
+                $.ajax({
+                    url: 'copilot/auth/start',
+                    type: 'POST',
+                    contentType: 'application/json',
+                    data: JSON.stringify({ nodeId }),
+                })
+                .done(function (data) {
+                    if (data.error) {
+                        $('#copilot-oauth-status').addClass('copilot-oauth-err').text('Error: ' + data.error);
+                        btn.prop('disabled', false).text('Connect with GitHub');
+                        return;
+                    }
+                    const { sessionId, url, code } = data;
+                    $('#copilot-oauth-status').html(
+                        'Visit <a href="' + url + '" target="_blank">' + url + '</a>' +
+                        ' and enter code <strong>' + code + '</strong>'
+                    );
+                    window.open(url, '_blank');
+                    btn.text('Waiting…');
+
+                    function poll() {
+                        $.get('copilot/auth/poll/' + sessionId).done(function (r) {
+                            if (r.error) {
+                                $('#copilot-oauth-status').removeClass('copilot-oauth-ok').addClass('copilot-oauth-err').text('Error: ' + r.error);
+                                btn.prop('disabled', false).text('Connect with GitHub');
+                            } else if (r.done) {
+                                $('#copilot-oauth-status').removeClass('copilot-oauth-err').addClass('copilot-oauth-ok').text('✓ Authenticated');
+                                btn.prop('disabled', false).text('Reconnect');
+                            } else {
+                                setTimeout(poll, 2000);
+                            }
+                        }).fail(function () {
+                            $('#copilot-oauth-status').addClass('copilot-oauth-err').text('Poll failed');
+                            btn.prop('disabled', false).text('Connect with GitHub');
+                        });
+                    }
+                    setTimeout(poll, 2000);
+                }).fail(function (xhr) {
+                    const msg = (xhr.responseJSON && xhr.responseJSON.error) || xhr.statusText;
+                    $('#copilot-oauth-status').addClass('copilot-oauth-err').text('Error: ' + msg);
+                    btn.prop('disabled', false).text('Connect with GitHub');
+                });
+            });
         },
     });
 </script>
@@ -39,6 +96,11 @@
     <div class="form-row" id="copilot-token-row">
         <label for="node-config-input-githubToken"><i class="fa fa-key"></i> Token</label>
         <input type="password" id="node-config-input-githubToken" placeholder="ghp_...">
+    </div>
+    <div class="form-row" id="copilot-oauth-row">
+        <label>&nbsp;</label>
+        <button type="button" id="copilot-oauth-connect" class="red-ui-button">Connect with GitHub</button>
+        <span id="copilot-oauth-status" style="margin-left:8px;font-size:0.9em;"></span>
     </div>
     <div class="form-row">
         <label for="node-config-input-cliPath"><i class="fa fa-terminal"></i> CLI Path</label>

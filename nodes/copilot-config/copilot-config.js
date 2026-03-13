@@ -6,6 +6,43 @@ const _sdk = {
     load: () => import('@github/copilot-sdk'),
 };
 
+// GitHub OAuth app registered for the Copilot CLI device flow.
+const GITHUB_OAUTH_CLIENT_ID = 'Ov23ctDVkRmgkPke0Mmm';
+const GITHUB_DEVICE_CODE_URL = 'https://github.com/login/device/code';
+const GITHUB_TOKEN_URL = 'https://github.com/login/oauth/access_token';
+
+// _httpPost.fn is exposed so tests can inject a mock without hitting the network.
+const _httpPost = {
+    fn: function httpPost(url, params) {
+        const https = require('https');
+        const querystring = require('querystring');
+        const body = querystring.stringify(params);
+        return new Promise((resolve, reject) => {
+            const urlObj = new URL(url);
+            const req = https.request({
+                hostname: urlObj.hostname,
+                path: urlObj.pathname,
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Accept': 'application/json',
+                    'Content-Length': Buffer.byteLength(body),
+                },
+            }, (res) => {
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => {
+                    try { resolve(JSON.parse(data)); }
+                    catch (e) { reject(new Error('Non-JSON response: ' + data)); }
+                });
+            });
+            req.on('error', reject);
+            req.write(body);
+            req.end();
+        });
+    },
+};
+
 // Resolve the copilot CLI binary bundled with @github/copilot, which is
 // a dependency of @github/copilot-sdk. Using __dirname keeps this reliable
 // regardless of how the module is loaded, and works inside Docker volumes.
@@ -79,13 +116,13 @@ module.exports = function (RED) {
         };
 
         const token = this.credentials && this.credentials.githubToken;
-        if (this.authMethod === 'token' && token) {
-            // PAT fallback — explicit token takes priority, disables logged-in user auth
+        if (token) {
+            // Token from OAuth flow or PAT — takes priority, disables logged-in user auth
             options.githubToken = token;
             options.useLoggedInUser = false;
         } else {
-            // Primary: use GitHub OAuth credentials stored by the Copilot CLI (gh auth)
-            options.useLoggedInUser = true;
+            // No token configured: try stored CLI credentials (oauth mode) or fail (token mode)
+            options.useLoggedInUser = this.authMethod !== 'token';
         }
         if (this.cliPath) {
             options.cliPath = this.cliPath;
@@ -112,6 +149,91 @@ module.exports = function (RED) {
     });
 
     const MODELS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+    // In-progress login sessions keyed by a random session ID.
+    // Cleaned up when polled after completion, or after a 10-minute TTL.
+    const loginSessions = new Map();
+
+    // POST /copilot/auth/start
+    // Starts a GitHub device-flow OAuth session, returning the URL and code
+    // for the user to visit. Token polling runs in the background; when the
+    // token is received it is stored directly on the config node's credentials.
+    RED.httpAdmin.post('/copilot/auth/start', RED.auth.needsPermission('copilot-config.write'), async (req, res) => {
+        const nodeId = req.body && req.body.nodeId;
+        const sessionId = require('crypto').randomBytes(8).toString('hex');
+
+        let deviceData;
+        try {
+            deviceData = await _httpPost.fn(GITHUB_DEVICE_CODE_URL, { client_id: GITHUB_OAUTH_CLIENT_ID });
+        } catch (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        if (deviceData.error) {
+            return res.status(500).json({ error: deviceData.error_description || deviceData.error });
+        }
+
+        const session = { done: false, error: null, createdAt: Date.now() };
+        loginSessions.set(sessionId, session);
+        session.ttlTimer = setTimeout(() => loginSessions.delete(sessionId), 10 * 60 * 1000).unref();
+
+        // Poll GitHub's token endpoint in the background.
+        const { device_code, interval = 5, expires_in = 900 } = deviceData;
+        (async () => {
+            const deadline = Date.now() + expires_in * 1000;
+            let pollDelay = interval * 1000;
+            while (Date.now() < deadline) {
+                await new Promise(r => setTimeout(r, pollDelay).unref());
+                let result;
+                try {
+                    result = await _httpPost.fn(GITHUB_TOKEN_URL, {
+                        client_id: GITHUB_OAUTH_CLIENT_ID,
+                        device_code,
+                        grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+                    });
+                } catch (err) {
+                    session.error = err.message;
+                    session.done = true;
+                    return;
+                }
+                if (result.access_token) {
+                    if (nodeId) {
+                        const configNode = RED.nodes.getNode(nodeId);
+                        if (configNode) {
+                            if (!configNode.credentials) configNode.credentials = {};
+                            configNode.credentials.githubToken = result.access_token;
+                            // Reset client so next use picks up the new token
+                            configNode._client = null;
+                            configNode._startPromise = null;
+                        }
+                    }
+                    session.done = true;
+                    return;
+                }
+                if (result.error === 'slow_down') pollDelay += 5000;
+                if (result.error !== 'authorization_pending') {
+                    session.error = result.error_description || result.error || 'Unknown error';
+                    session.done = true;
+                    return;
+                }
+            }
+            session.error = 'Authorization timed out';
+            session.done = true;
+        })();
+
+        res.json({ sessionId, url: deviceData.verification_uri, code: deviceData.user_code });
+    });
+
+    // GET /copilot/auth/poll/:sessionId
+    // Returns { done, error } so the browser can tell when login has completed.
+    RED.httpAdmin.get('/copilot/auth/poll/:sessionId', RED.auth.needsPermission('copilot-config.read'), (req, res) => {
+        const session = loginSessions.get(req.params.sessionId);
+        if (!session) return res.status(404).json({ error: 'Session not found' });
+        if (session.done) {
+            clearTimeout(session.ttlTimer);
+            loginSessions.delete(req.params.sessionId);
+        }
+        res.json({ done: session.done, error: session.error || null });
+    });
 
     // Admin endpoint: GET /copilot/models?configId=<id>
     // Used by the prompt node editor to populate the model dropdown dynamically.
@@ -141,5 +263,6 @@ module.exports = function (RED) {
     });
 };
 
-// Exposed for testing — allows injecting a mock SDK without proxyquire
+// Exposed for testing — allows injecting mocks without proxyquire
 module.exports._sdk = _sdk;
+module.exports._httpPost = _httpPost;
