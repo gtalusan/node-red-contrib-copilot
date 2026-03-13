@@ -227,5 +227,51 @@ describe('copilot-config node', function () {
                     });
             });
         });
+
+        it('returns cached result on second request without calling listModels again', function (done) {
+            const inst = buildMockInstance();
+            const flow = [{ id: 'cfg1', type: 'copilot-config', authMethod: 'token' }];
+            helper.load(copilotConfigModule, flow, { cfg1: { githubToken: 'tok' } }, function () {
+                helper.request()
+                    .get('/copilot/models?configId=cfg1')
+                    .expect(200)
+                    .end(function (err) {
+                        if (err) return done(err);
+                        helper.request()
+                            .get('/copilot/models?configId=cfg1')
+                            .expect(200)
+                            .end(function (err2, res) {
+                                if (err2) return done(err2);
+                                inst.listModels.calledOnce.should.be.true();
+                                res.body[0].should.have.property('id', 'claude-haiku-4.5');
+                                done();
+                            });
+                    });
+            });
+        });
+
+        it('refreshes cache after TTL expires', function (done) {
+            const inst = buildMockInstance();
+            const flow = [{ id: 'cfg1', type: 'copilot-config', authMethod: 'token' }];
+            helper.load(copilotConfigModule, flow, { cfg1: { githubToken: 'tok' } }, function () {
+                const n = helper.getNode('cfg1');
+                helper.request()
+                    .get('/copilot/models?configId=cfg1')
+                    .expect(200)
+                    .end(function (err) {
+                        if (err) return done(err);
+                        // Backdate the cache timestamp to simulate TTL expiry
+                        n._modelsCacheAt = Date.now() - (6 * 60 * 1000);
+                        helper.request()
+                            .get('/copilot/models?configId=cfg1')
+                            .expect(200)
+                            .end(function (err2) {
+                                if (err2) return done(err2);
+                                inst.listModels.calledTwice.should.be.true();
+                                done();
+                            });
+                    });
+            });
+        });
     });
 });

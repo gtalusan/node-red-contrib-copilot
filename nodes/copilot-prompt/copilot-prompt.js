@@ -4,8 +4,30 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const DEFAULT_MODEL = 'claude-haiku-4.5';
+const DEFAULT_MODEL = 'gpt-4.1';
 const DEFAULT_TIMEOUT = 60000;
+const DEFAULT_SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+
+/**
+ * Sniffs the file extension from a base64 string or Buffer by checking magic bytes.
+ * Returns e.g. '.jpg', '.png', '.gif', '.webp', '.pdf', or '' if unknown.
+ */
+function guessExtension(attachment) {
+    let buf;
+    if (attachment.type === 'base64' && attachment.data) {
+        buf = Buffer.from(attachment.data.slice(0, 16), 'base64');
+    } else if (attachment.type === 'buffer' && Buffer.isBuffer(attachment.data)) {
+        buf = attachment.data.slice(0, 16);
+    } else {
+        return '';
+    }
+    if (buf[0] === 0xFF && buf[1] === 0xD8) return '.jpg';
+    if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) return '.png';
+    if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) return '.gif';
+    if (buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46) return '.webp';
+    if (buf[0] === 0x25 && buf[1] === 0x50 && buf[2] === 0x44 && buf[3] === 0x46) return '.pdf';
+    return '';
+}
 
 /**
  * Normalises an attachment descriptor into an SDK-compatible `{ type, path }` object.
@@ -26,7 +48,9 @@ function normaliseAttachment(attachment) {
     }
 
     const tmpDir = os.tmpdir();
-    const name = attachment.name || 'attachment';
+    const rawName = attachment.name || 'attachment';
+    // If the name has no extension, sniff the format from magic bytes / base64 header
+    const name = path.extname(rawName) ? rawName : rawName + guessExtension(attachment);
     const tempFile = path.join(tmpDir, `nr-copilot-${Date.now()}-${Math.random().toString(36).slice(2)}-${name}`);
 
     if (attachment.type === 'base64') {
@@ -56,13 +80,52 @@ module.exports = function (RED) {
         this.model = config.model || DEFAULT_MODEL;
         this.reasoningEffort = config.reasoningEffort || undefined;
         this.timeout = parseInt(config.timeout, 10) || DEFAULT_TIMEOUT;
+        this.conversationId = config.conversationId || ''; // '' means use node.id
+        const sessionTimeoutMin = parseFloat(config.sessionTimeout);
+        this.sessionTimeoutMs = isFinite(sessionTimeoutMin) && sessionTimeoutMin > 0
+            ? sessionTimeoutMin * 60 * 1000
+            : (sessionTimeoutMin === 0 ? 0 : DEFAULT_SESSION_TIMEOUT_MS);
+
+        // Map of conversationId → { session, timer|null }
+        this._sessions = new Map();
 
         const node = this;
+
+        // Destroy a single session entry and clear its idle timer.
+        async function destroySession(key) {
+            const entry = node._sessions.get(key);
+            if (!entry) return;
+            node._sessions.delete(key);
+            clearTimeout(entry.timer);
+            try { await entry.session.destroy(); } catch (_) { /* ignore */ }
+        }
+
+        // Arm (or re-arm) the idle timer for a session.
+        function armTimer(key) {
+            if (node.sessionTimeoutMs === 0) return null;
+            return setTimeout(() => destroySession(key), node.sessionTimeoutMs);
+        }
+
+        this.on('close', async (done) => {
+            const keys = [...node._sessions.keys()];
+            await Promise.all(keys.map(destroySession));
+            done();
+        });
 
         this.on('input', async function (msg, send, done) {
             // Support both old (1-arg send) and new (2-arg) Node-RED APIs
             send = send || function () { node.send.apply(node, arguments); };
             done = done || function (err) { if (err) { node.error(err, msg); } };
+
+            // Resolve the conversation key: msg > node config > node.id
+            const convKey = msg.conversationId || node.conversationId || node.id;
+
+            // msg.reset = true: destroy the session and swallow the message
+            if (msg.reset) {
+                await destroySession(convKey);
+                node.status({ fill: 'grey', shape: 'ring', text: 'reset' });
+                return done();
+            }
 
             node.status({ fill: 'blue', shape: 'dot', text: 'sending…' });
 
@@ -83,14 +146,16 @@ module.exports = function (RED) {
                 prompt = msg.payload;
             } else if (msg.payload && typeof msg.payload === 'object') {
                 prompt = msg.payload.prompt || '';
-                rawAttachments = msg.payload.attachments || [];
+                const pa = msg.payload.attachments;
+                rawAttachments = Array.isArray(pa) ? pa : (pa ? [pa] : []);
             } else {
                 prompt = String(msg.payload || '');
             }
 
             // msg.attachments can supplement / override
-            if (Array.isArray(msg.attachments)) {
-                rawAttachments = rawAttachments.concat(msg.attachments);
+            const ma = msg.attachments;
+            if (ma) {
+                rawAttachments = rawAttachments.concat(Array.isArray(ma) ? ma : [ma]);
             }
 
             // Model can be overridden per-message
@@ -112,19 +177,26 @@ module.exports = function (RED) {
                 return done();
             }
 
-            // --- Build session config ---
-            const { approveAll } = await import('@github/copilot-sdk');
-            const sessionConfig = { model, onPermissionRequest: approveAll };
-            if (node.reasoningEffort) {
-                sessionConfig.reasoningEffort = node.reasoningEffort;
-            }
-
-            // --- Send to Copilot ---
+            // --- Get or create a session for this conversation ---
             let client;
             let session;
             try {
                 client = await configNode.getClient();
-                session = await client.createSession(sessionConfig);
+
+                let entry = node._sessions.get(convKey);
+                if (entry) {
+                    // Re-arm the idle timer and reuse the live session
+                    clearTimeout(entry.timer);
+                    entry.timer = armTimer(convKey);
+                    session = entry.session;
+                } else {
+                    const { approveAll } = await import('@github/copilot-sdk');
+                    const sessionConfig = { model, onPermissionRequest: approveAll };
+                    if (node.reasoningEffort) sessionConfig.reasoningEffort = node.reasoningEffort;
+                    session = await client.createSession(sessionConfig);
+                    const timer = armTimer(convKey);
+                    node._sessions.set(convKey, { session, timer });
+                }
 
                 const messageOptions = { prompt };
                 if (sdkAttachments.length > 0) {
@@ -137,21 +209,19 @@ module.exports = function (RED) {
                 const response = await session.sendAndWait(messageOptions, node.timeout);
 
                 cleanupTempFiles(tempFiles);
-                await session.destroy();
 
                 const responseText = response ? response.data.content : '';
                 node.status({ fill: 'green', shape: 'dot', text: 'done' });
 
                 msg.payload = responseText;
-                msg.sessionId = session.sessionId;
+                msg.conversationId = convKey;
                 msg.events = events;
                 send([msg, null]);
                 done();
             } catch (err) {
                 cleanupTempFiles(tempFiles);
-                if (session) {
-                    try { await session.destroy(); } catch (_) { /* ignore */ }
-                }
+                // On error, discard the session so the next message starts fresh
+                await destroySession(convKey);
                 node.status({ fill: 'red', shape: 'ring', text: 'error' });
                 send([null, { payload: err.message, error: err, _msgid: msg._msgid }]);
                 done();

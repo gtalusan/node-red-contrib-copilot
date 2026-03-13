@@ -8,6 +8,8 @@
             model: { value: '' },
             reasoningEffort: { value: '' },
             timeout: { value: 60000 },
+            conversationId: { value: '' },
+            sessionTimeout: { value: 30 },
         },
         inputs: 1,
         outputs: 2,
@@ -81,10 +83,20 @@
         <label for="node-input-timeout"><i class="fa fa-clock-o"></i> Timeout (ms)</label>
         <input type="number" id="node-input-timeout" placeholder="60000" min="1000">
     </div>
+    <div class="form-row">
+        <label for="node-input-conversationId"><i class="fa fa-comments"></i> Conv. ID</label>
+        <input type="text" id="node-input-conversationId" placeholder="(leave blank to use node ID)">
+    </div>
+    <div class="form-row">
+        <label for="node-input-sessionTimeout"><i class="fa fa-hourglass-half"></i> Session idle (min)</label>
+        <input type="number" id="node-input-sessionTimeout" placeholder="30" min="0">
+    </div>
 </script>
 
 <script type="text/html" data-help-name="copilot-prompt">
-    <p>Send a prompt (with optional attachments) to GitHub Copilot and receive a response.</p>
+    <p>Send a prompt (with optional attachments) to GitHub Copilot and receive a response.
+    Conversations are stateful by default — context is preserved across messages in the same
+    conversation thread.</p>
 
     <h3>Inputs</h3>
     <dl class="message-properties">
@@ -102,6 +114,20 @@
         </dd>
         <dt class="optional">model <span class="property-type">string</span></dt>
         <dd>Override the model for this message (e.g. <code>"gpt-5"</code>).</dd>
+        <dt class="optional">conversationId <span class="property-type">string</span></dt>
+        <dd>
+            Identifies the conversation thread to use. If omitted, defaults to the node's
+            configured <em>Conv. ID</em>, or the node's own ID if that is also blank.
+            Set a per-user value (e.g. a user ID or session token) to maintain separate
+            conversation threads through a single node.
+        </dd>
+        <dt class="optional">reset <span class="property-type">boolean</span></dt>
+        <dd>
+            When <code>true</code>, destroys the active session for the resolved
+            <code>conversationId</code> and swallows the message — nothing is sent to
+            Copilot and no output is produced. Use this to start a conversation over
+            from scratch. The next message will open a fresh session.
+        </dd>
     </dl>
 
     <h3>Outputs</h3>
@@ -110,8 +136,8 @@
             <dl class="message-properties">
                 <dt>payload <span class="property-type">string</span></dt>
                 <dd>The assistant's response text.</dd>
-                <dt>sessionId <span class="property-type">string</span></dt>
-                <dd>The Copilot session ID.</dd>
+                <dt>conversationId <span class="property-type">string</span></dt>
+                <dd>The conversation thread key used for this message.</dd>
                 <dt>events <span class="property-type">array</span></dt>
                 <dd>All session events emitted during the request.</dd>
             </dl>
@@ -125,4 +151,17 @@
             </dl>
         </li>
     </ol>
+
+    <h3>Session lifecycle</h3>
+    <p>
+        Sessions are created on first use and kept alive between messages so that
+        conversation context is preserved. A session is closed when:
+    </p>
+    <ul>
+        <li>A message with <code>msg.reset = true</code> is received.</li>
+        <li>The session has been idle longer than the configured <em>Session idle</em>
+            timeout (default 30 min; set to <code>0</code> to disable).</li>
+        <li>An error occurs — the session is discarded so the next message starts fresh.</li>
+        <li>The node is redeployed or Node-RED shuts down.</li>
+    </ul>
 </script>

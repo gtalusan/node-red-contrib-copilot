@@ -57,6 +57,8 @@ function buildFlow(promptConfig = {}) {
             model: promptConfig.model || 'gpt-4o-mini',
             reasoningEffort: promptConfig.reasoningEffort || '',
             timeout: promptConfig.timeout || 10000,
+            conversationId: promptConfig.conversationId || '',
+            sessionTimeout: promptConfig.sessionTimeout !== undefined ? promptConfig.sessionTimeout : 30,
             wires: [['out1'], ['err1']],
         },
         { id: 'out1', type: 'helper' },
@@ -93,7 +95,7 @@ describe('copilot-prompt node', function () {
             const out = helper.getNode('out1');
             out.on('input', function (msg) {
                 msg.payload.should.equal('The answer is 42');
-                msg.should.have.property('sessionId', session.sessionId);
+                msg.should.have.property('conversationId').which.is.a.String();
                 msg.should.have.property('events').which.is.an.Array();
                 done();
             });
@@ -221,6 +223,37 @@ describe('copilot-prompt node', function () {
         });
     });
 
+    it('accepts a single attachment object (not wrapped in array) in payload.attachments', function (done) {
+        const session = buildSession();
+        buildClientInstance(session);
+        helper.load([copilotConfigModule, copilotPromptModule], buildFlow(), { cfg1: { githubToken: 'tok' } }, function () {
+            const n = helper.getNode('n1');
+            const out = helper.getNode('out1');
+            out.on('input', function () {
+                const call = session.sendAndWait.firstCall.args[0];
+                call.attachments.length.should.equal(1);
+                call.attachments[0].should.have.property('path', '/tmp/a.png');
+                done();
+            });
+            n.receive({ payload: { prompt: 'describe', attachments: { type: 'file', path: '/tmp/a.png' } } });
+        });
+    });
+
+    it('accepts a single attachment object (not wrapped in array) in msg.attachments', function (done) {
+        const session = buildSession();
+        buildClientInstance(session);
+        helper.load([copilotConfigModule, copilotPromptModule], buildFlow(), { cfg1: { githubToken: 'tok' } }, function () {
+            const n = helper.getNode('n1');
+            const out = helper.getNode('out1');
+            out.on('input', function () {
+                const call = session.sendAndWait.firstCall.args[0];
+                call.attachments.length.should.equal(1);
+                call.attachments[0].should.have.property('path', '/tmp/b.png');
+                done();
+            });
+            n.receive({ payload: 'describe', attachments: { type: 'file', path: '/tmp/b.png' } });
+        });
+    });
     it('merges attachments from payload.attachments and msg.attachments', function (done) {
         const session = buildSession();
         buildClientInstance(session);
@@ -286,6 +319,150 @@ describe('copilot-prompt node', function () {
                 done();
             });
             n.receive({ payload: 'test', attachments: [{ type: 'unsupported', data: 'x' }] });
+        });
+    });
+
+    // ---- Conversation / session lifecycle ----
+
+    it('reuses the same session for consecutive messages (stateful)', function (done) {
+        const session = buildSession();
+        const client = buildClientInstance(session);
+        helper.load([copilotConfigModule, copilotPromptModule], buildFlow(), { cfg1: { githubToken: 'tok' } }, function () {
+            const n = helper.getNode('n1');
+            const out = helper.getNode('out1');
+            let count = 0;
+            out.on('input', function () {
+                count++;
+                if (count === 2) {
+                    client.createSession.calledOnce.should.be.true();
+                    session.destroy.called.should.be.false();
+                    done();
+                }
+            });
+            n.receive({ payload: 'first message' });
+            // Send second message after a tick to avoid race on the first
+            setImmediate(() => n.receive({ payload: 'second message' }));
+        });
+    });
+
+    it('creates separate sessions for different conversationIds', function (done) {
+        const session = buildSession();
+        const client = buildClientInstance(session);
+        helper.load([copilotConfigModule, copilotPromptModule], buildFlow(), { cfg1: { githubToken: 'tok' } }, function () {
+            const n = helper.getNode('n1');
+            const out = helper.getNode('out1');
+            let count = 0;
+            out.on('input', function () {
+                count++;
+                if (count === 2) {
+                    client.createSession.calledTwice.should.be.true();
+                    done();
+                }
+            });
+            n.receive({ payload: 'hello', conversationId: 'user-a' });
+            setImmediate(() => n.receive({ payload: 'hello', conversationId: 'user-b' }));
+        });
+    });
+
+    it('msg.reset destroys the session and emits nothing', function (done) {
+        const session = buildSession();
+        buildClientInstance(session);
+        helper.load([copilotConfigModule, copilotPromptModule], buildFlow(), { cfg1: { githubToken: 'tok' } }, function () {
+            const n = helper.getNode('n1');
+            const out = helper.getNode('out1');
+            const err = helper.getNode('err1');
+
+            // First send a real message to establish a session
+            out.on('input', function () {
+                // Now send a reset — no output should follow
+                const outSpy = sinon.spy();
+                out.removeAllListeners('input');
+                out.on('input', outSpy);
+                err.on('input', outSpy);
+
+                n.receive({ payload: 'ignored', reset: true });
+
+                // Wait a tick to confirm no output was emitted
+                setImmediate(() => {
+                    outSpy.called.should.be.false();
+                    session.destroy.calledOnce.should.be.true();
+                    done();
+                });
+            });
+            n.receive({ payload: 'establish session' });
+        });
+    });
+
+    it('msg.reset on a non-existent session is a no-op', function (done) {
+        buildClientInstance(buildSession());
+        helper.load([copilotConfigModule, copilotPromptModule], buildFlow(), { cfg1: { githubToken: 'tok' } }, function () {
+            const n = helper.getNode('n1');
+            // No session established yet — reset should not throw
+            n.receive({ payload: 'ignored', reset: true, conversationId: 'ghost' });
+            setImmediate(done);
+        });
+    });
+
+    it('msg.conversationId is echoed on the output message', function (done) {
+        const session = buildSession();
+        buildClientInstance(session);
+        helper.load([copilotConfigModule, copilotPromptModule], buildFlow(), { cfg1: { githubToken: 'tok' } }, function () {
+            const n = helper.getNode('n1');
+            const out = helper.getNode('out1');
+            out.on('input', function (msg) {
+                msg.conversationId.should.equal('chat-42');
+                done();
+            });
+            n.receive({ payload: 'hello', conversationId: 'chat-42' });
+        });
+    });
+
+    it('idle timeout destroys the session after the TTL', function (done) {
+        const session = buildSession();
+        buildClientInstance(session);
+        // sessionTimeout of 1 minute
+        helper.load([copilotConfigModule, copilotPromptModule], buildFlow({ sessionTimeout: 1 }), { cfg1: { githubToken: 'tok' } }, function () {
+            const n = helper.getNode('n1');
+            const out = helper.getNode('out1');
+            // Install fake timers only after helper.load finishes to avoid intercepting its internals
+            const clock = sinon.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+            out.on('input', function () {
+                session.destroy.called.should.be.false();
+                // Advance past the 1-minute TTL
+                clock.tick(61 * 1000);
+                // Allow the async destroySession microtask to settle
+                setImmediate(() => {
+                    session.destroy.calledOnce.should.be.true();
+                    n._sessions.size.should.equal(0);
+                    clock.restore();
+                    done();
+                });
+            });
+            n.receive({ payload: 'start conversation' });
+        });
+    });
+
+    it('error causes session to be discarded; next message creates a fresh one', function (done) {
+        const session = buildSession();
+        session.sendAndWait.onFirstCall().rejects(new Error('transient error'));
+        session.sendAndWait.onSecondCall().resolves({ type: 'assistant.message', data: { content: 'recovered' } });
+        const client = buildClientInstance(session);
+        helper.load([copilotConfigModule, copilotPromptModule], buildFlow(), { cfg1: { githubToken: 'tok' } }, function () {
+            const n = helper.getNode('n1');
+            const out = helper.getNode('out1');
+            const err = helper.getNode('err1');
+            err.on('input', function () {
+                // After the error the session map should be empty
+                n._sessions.size.should.equal(0);
+                // Second message should create a new session
+                out.on('input', function (msg) {
+                    msg.payload.should.equal('recovered');
+                    client.createSession.calledTwice.should.be.true();
+                    done();
+                });
+                setImmediate(() => n.receive({ payload: 'retry' }));
+            });
+            n.receive({ payload: 'will fail' });
         });
     });
 });

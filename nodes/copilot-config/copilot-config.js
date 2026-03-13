@@ -45,6 +45,8 @@ module.exports = function (RED) {
         // this.credentials.githubToken populated by Node-RED when authMethod === 'token'
         this._client = null;
         this._startPromise = null;
+        this._modelsCache = null;
+        this._modelsCacheAt = 0;
 
         this.on('close', async (done) => {
             if (this._client) {
@@ -55,6 +57,8 @@ module.exports = function (RED) {
                 }
                 this._client = null;
                 this._startPromise = null;
+                this._modelsCache = null;
+                this._modelsCacheAt = 0;
             }
             done();
         });
@@ -107,20 +111,30 @@ module.exports = function (RED) {
         },
     });
 
+    const MODELS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
     // Admin endpoint: GET /copilot/models?configId=<id>
     // Used by the prompt node editor to populate the model dropdown dynamically.
+    // Results are cached on the config node for MODELS_CACHE_TTL_MS to avoid
+    // hitting the SDK on every editor open.
     RED.httpAdmin.get('/copilot/models', RED.auth.needsPermission('copilot-config.read'), async (req, res) => {
         const configNode = RED.nodes.getNode(req.query.configId);
         if (!configNode) {
             return res.status(404).json({ error: 'Config node not found' });
         }
+        const now = Date.now();
+        if (configNode._modelsCache && (now - configNode._modelsCacheAt) < MODELS_CACHE_TTL_MS) {
+            return res.json(configNode._modelsCache);
+        }
         try {
             const client = await configNode.getClient();
             const models = await client.listModels();
-            res.json(models.map(m => ({
+            configNode._modelsCache = models.map(m => ({
                 id: m.id,
                 multiplier: m.billing ? m.billing.multiplier : null,
-            })));
+            }));
+            configNode._modelsCacheAt = now;
+            res.json(configNode._modelsCache);
         } catch (err) {
             res.status(500).json({ error: err.message });
         }
