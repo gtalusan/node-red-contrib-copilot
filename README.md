@@ -29,7 +29,7 @@ Two methods are supported:
 
 ### Node.js
 
-**Node.js v24** is required. The `@github/copilot` CLI binary bundled with the SDK is a native binary that requires a glibc-based (non-musl) environment.
+**Node.js v20 or later** is required (matches the `@github/copilot-sdk` minimum). The `@github/copilot` CLI binary bundled with the SDK is a native binary that requires a glibc-based (non-musl) environment.
 
 ---
 
@@ -38,13 +38,15 @@ Two methods are supported:
 The recommended container is:
 
 ```
-nodered/node-red-dev:5.0.0-beta.3-debian
+nodered/node-red:latest-debian
 ```
 
 This image provides:
-- Node-RED 5.0 (beta)
-- **Node.js v24** — required by the bundled Copilot CLI binary
-- **Debian (glibc)** — the CLI binary is dynamically linked against glibc; Alpine (musl) is **not** supported
+- Node-RED (latest stable)
+- **Node.js v20** — meets the `@github/copilot-sdk` minimum requirement
+- **Debian (glibc)** — the CLI binary is dynamically linked against glibc; Alpine/musl images are **not** supported
+
+> ⚠️ Do **not** use Alpine-based images (`nodered/node-red:latest`). The bundled Copilot CLI binary requires glibc and will not run on musl libc.
 
 ### Quick start
 
@@ -53,7 +55,7 @@ docker run -d \
   --name nodered \
   -p 1880:1880 \
   -v /your/data:/data \
-  nodered/node-red-dev:5.0.0-beta.3-debian
+  nodered/node-red:latest-debian
 ```
 
 ---
