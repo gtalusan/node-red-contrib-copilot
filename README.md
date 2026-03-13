@@ -1,6 +1,6 @@
-# node-red-contrib-copilot
+# @george.talusan/node-red-contrib-copilot
 
-![node-red-contrib-copilot](https://img.shields.io/npm/v/node-red-contrib-copilot?label=npm)
+![npm](https://img.shields.io/npm/v/%40george.talusan%2Fnode-red-contrib-copilot?label=npm)
 ![Node-RED](https://img.shields.io/badge/node--red-%3E%3D3.0.0-red)
 ![License](https://img.shields.io/badge/license-ISC-blue)
 
@@ -64,19 +64,21 @@ docker run -d \
 
 ### Via the Node-RED Palette Manager
 
-Search for `node-red-contrib-copilot` in the Palette Manager and click **Install**.
+Search for `@george.talusan/node-red-contrib-copilot` in the Palette Manager and click **Install**.
+
+If you are publishing your own fork or a renamed package, note that the Node-RED Flow Library does not auto-index npm packages. After publishing, submit it manually at `https://flows.nodered.org/add/node`.
 
 ### Via npm (inside your Node-RED data directory)
 
 ```bash
 cd /your/node-red/data
-npm install node-red-contrib-copilot
+npm install @george.talusan/node-red-contrib-copilot
 ```
 
 ### In Docker
 
 ```bash
-docker exec nodered npm install node-red-contrib-copilot --prefix /data
+docker exec nodered npm install @george.talusan/node-red-contrib-copilot --prefix /data
 docker restart nodered
 ```
 
@@ -166,7 +168,7 @@ The SDK manages the CLI process lifecycle automatically. The CLI binary is bundl
 
 ## Example flow
 
-The example flow used in this README is included in the repository: [copilot-test-flow.json](./copilot-test-flow.json)
+The example flow used in this README is included in the repository under [`examples/copilot-test-flow.json`](./examples/copilot-test-flow.json).
 
 
 ---
@@ -174,7 +176,7 @@ The example flow used in this README is included in the repository: [copilot-tes
 ## Development
 
 ```bash
-git clone https://github.com/yourname/node-red-contrib-copilot
+git clone https://github.com/gtalusan/node-red-contrib-copilot
 cd node-red-contrib-copilot
 npm install
 
@@ -189,8 +191,8 @@ GITHUB_TOKEN=<your-fine-grained-pat> npm run test:integration
 
 ```bash
 npm pack
-cp node-red-contrib-copilot-*.tgz ~/your/node-red/data/
-docker exec nodered npm install /data/node-red-contrib-copilot-*.tgz --prefix /data
+cp george.talusan-node-red-contrib-copilot-*.tgz ~/your/node-red/data/
+docker exec nodered npm install /data/george.talusan-node-red-contrib-copilot-*.tgz --prefix /data
 docker restart nodered
 ```
 

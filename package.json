@@ -1,9 +1,17 @@
 {
-  "name": "node-red-contrib-copilot",
-  "version": "0.0.4",
+  "name": "@george.talusan/node-red-contrib-copilot",
+  "version": "0.0.5",
   "description": "Node-RED nodes for GitHub Copilot via @github/copilot-sdk",
   "license": "ISC",
   "author": "George Talusan",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gtalusan/node-red-contrib-copilot.git"
+  },
+  "homepage": "https://github.com/gtalusan/node-red-contrib-copilot#readme",
+  "bugs": {
+    "url": "https://github.com/gtalusan/node-red-contrib-copilot/issues"
+  },
   "type": "commonjs",
   "main": "index.js",
   "keywords": [
