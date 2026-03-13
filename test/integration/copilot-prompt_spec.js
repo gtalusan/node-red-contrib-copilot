@@ -114,11 +114,37 @@ function buildFlow(model) {
         });
     });
 
+    it('handles a JPEG attachment', function (done) {
+        const b64 = fs.readFileSync(path.join(__dirname, '..', 'fixtures', 'test.jpg')).toString('base64');
+        send({
+            payload: 'What colour is the shape in this image? Reply with only the colour name.',
+            attachments: [{ type: 'base64', data: b64, name: 'test.jpg' }],
+            conversationId: 'test-6',
+        }, function (err, msg) {
+            if (err) return done(err);
+            msg.payload.toLowerCase().should.containEql('red');
+            done();
+        });
+    });
+
+    it('handles a PDF attachment', function (done) {
+        const b64 = fs.readFileSync(path.join(__dirname, '..', 'fixtures', 'test.pdf')).toString('base64');
+        send({
+            payload: 'What is the secret word mentioned in the document? Reply with only the word.',
+            attachments: [{ type: 'base64', data: b64, name: 'test.pdf' }],
+            conversationId: 'test-7',
+        }, function (err, msg) {
+            if (err) return done(err);
+            msg.payload.toUpperCase().should.containEql('BANANA');
+            done();
+        });
+    });
+
     it('model can be overridden per-message via msg.model', function (done) {
         send({
             payload: 'Reply with only the word PONG',
             model: 'gpt-5-mini', // override to a different model
-            conversationId: 'test-5',
+            conversationId: 'test-8',
         }, function (err, msg) {
             if (err) return done(err);
             msg.payload.should.be.a.String().and.not.empty();
