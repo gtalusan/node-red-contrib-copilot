@@ -164,15 +164,8 @@ The SDK manages the CLI process lifecycle automatically. The CLI binary is bundl
 
 ## Example flow
 
-```json
-[
-  { "id": "cfg1", "type": "copilot-config", "name": "My Copilot", "authMethod": "token" },
-  { "id": "inj1", "type": "inject", "payload": "What is the capital of France?", "payloadType": "str", "wires": [["prompt1"]] },
-  { "id": "prompt1", "type": "copilot-prompt", "copilotConfig": "cfg1", "model": "gpt-4.1", "wires": [["dbg1"], ["err1"]] },
-  { "id": "dbg1", "type": "debug", "complete": "payload" },
-  { "id": "err1", "type": "debug", "complete": "payload" }
-]
-```
+The example flow used in this README is included in the repository: [copilot-test-flow.json](./copilot-test-flow.json)
+
 
 ---
 
