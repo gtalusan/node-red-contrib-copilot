@@ -40,7 +40,7 @@
     "file-type": "^21.3.2"
   },
   "devDependencies": {
-    "mocha": "^10.8.2",
+    "mocha": "^11.7.5",
     "node-red": "^4.1.7",
     "node-red-node-test-helper": "^0.3.6",
     "proxyquire": "^2.1.3",
