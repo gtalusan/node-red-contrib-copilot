@@ -155,6 +155,27 @@ describe('copilot-config node', function () {
         });
     });
 
+    it('getClient() restarts a new client when the previous CLI process has exited', function (done) {
+        buildMockInstance();
+        const flow = [{ id: 'cfg1', type: 'copilot-config' }];
+        helper.load(copilotConfigModule, flow, { cfg1: { githubToken: 'tok' } }, async function () {
+            const n = helper.getNode('cfg1');
+            const c1 = await n.getClient();
+
+            // Simulate a dead CLI process by patching exitCode
+            n._client.process = { exitCode: 1 };
+
+            // Build a new mock instance for the restarted client
+            buildMockInstance();
+            const c2 = await n.getClient();
+
+            // Should have constructed a fresh client, not reused the dead one
+            c2.should.not.equal(c1);
+            mockState.constructorArgs.length.should.equal(1);
+            done();
+        });
+    });
+
     it('stops the client when the node is closed', function (done) {
         const inst = buildMockInstance();
         const flow = [{ id: 'cfg1', type: 'copilot-config' }];
@@ -275,6 +296,41 @@ describe('copilot-config node', function () {
         });
     });
 
+    describe('POST /copilot/models/refresh', function () {
+        it('busts the models cache so next GET fetches fresh data', function (done) {
+            const inst = buildMockInstance();
+            const flow = [{ id: 'cfg1', type: 'copilot-config', authMethod: 'token' }];
+            helper.load(copilotConfigModule, flow, { cfg1: { githubToken: 'tok' } }, function () {
+                // Warm the cache
+                helper.request().get('/copilot/models?configId=cfg1').expect(200).end(function (err) {
+                    if (err) return done(err);
+                    inst.listModels.calledOnce.should.be.true();
+
+                    // Bust the cache
+                    helper.request().post('/copilot/models/refresh?configId=cfg1').expect(200).end(function (err2) {
+                        if (err2) return done(err2);
+
+                        // Next GET should call listModels again
+                        helper.request().get('/copilot/models?configId=cfg1').expect(200).end(function (err3) {
+                            if (err3) return done(err3);
+                            inst.listModels.calledTwice.should.be.true();
+                            done();
+                        });
+                    });
+                });
+            });
+        });
+
+        it('returns 404 for unknown configId', function (done) {
+            buildMockInstance();
+            helper.load(copilotConfigModule, [], {}, function () {
+                helper.request()
+                    .post('/copilot/models/refresh?configId=doesnotexist')
+                    .expect(404, done);
+            });
+        });
+    });
+
     describe('POST /copilot/auth/start and GET /copilot/auth/poll', function () {
         // Build a mock _httpPost.fn that returns deviceCodeResponse on the first call,
         // then cycles through tokenResponses for subsequent (polling) calls.
@@ -337,8 +393,36 @@ describe('copilot-config node', function () {
                                 if (err2) return done(err2);
                                 pollRes.body.should.have.property('done', true);
                                 pollRes.body.should.have.property('error', null);
+                                pollRes.body.should.have.property('token', 'gho_test_token');
                                 done();
                             });
+                    }, 100);
+                });
+            });
+        });
+
+        it('stores the token on the config node, clears client and models cache', function (done) {
+            copilotConfigModule._httpPost.fn = buildHttpPostMock(DEVICE_CODE_RESP, [
+                { access_token: 'gho_persisted_token' },
+            ]);
+
+            const flow = [{ id: 'cfg1', type: 'copilot-config', authMethod: 'oauth' }];
+            helper.load(copilotConfigModule, flow, {}, function () {
+                const n = helper.getNode('cfg1');
+                // Simulate a warm models cache
+                n._modelsCache = [{ id: 'old-model', multiplier: 1 }];
+                n._modelsCacheAt = Date.now();
+
+                helper.request().post('/copilot/auth/start').send({ nodeId: 'cfg1' }).end(function (err) {
+                    if (err) return done(err);
+                    setTimeout(function () {
+                        // Token should be set in memory on the node
+                        n.credentials.should.have.property('githubToken', 'gho_persisted_token');
+                        // Client should be reset so next call picks up the new token
+                        (n._startPromise === null).should.be.true();
+                        // Models cache should be cleared so next load fetches fresh data
+                        (n._modelsCache === null).should.be.true();
+                        done();
                     }, 100);
                 });
             });

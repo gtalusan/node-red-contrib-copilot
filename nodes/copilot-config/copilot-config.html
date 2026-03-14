@@ -60,7 +60,13 @@
                                 $('#copilot-oauth-status').removeClass('copilot-oauth-ok').addClass('copilot-oauth-err').text('Error: ' + r.error);
                                 btn.prop('disabled', false).text('Connect with GitHub');
                             } else if (r.done) {
-                                $('#copilot-oauth-status').removeClass('copilot-oauth-err').addClass('copilot-oauth-ok').text('✓ Authenticated');
+                                // Write the token into the (hidden) credential field so
+                                // Node-RED's normal form-save flow persists it to disk.
+                                // This survives restarts and subsequent deploys reliably.
+                                if (r.token) {
+                                    $('#node-config-input-githubToken').val(r.token);
+                                }
+                                $('#copilot-oauth-status').removeClass('copilot-oauth-err').addClass('copilot-oauth-ok').text('✓ Authenticated — click Done to save');
                                 btn.prop('disabled', false).text('Reconnect');
                             } else {
                                 setTimeout(poll, 2000);

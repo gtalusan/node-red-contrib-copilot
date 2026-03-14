@@ -104,8 +104,15 @@ module.exports = function (RED) {
     /**
      * Returns a started CopilotClient, creating and starting it on first call.
      * Subsequent calls return the same client (or wait for it to start).
+     * If the underlying CLI process has exited, the client is restarted.
      */
     CopilotConfigNode.prototype.getClient = function () {
+        // If the CLI process has exited, discard the stale client so we restart fresh
+        if (this._client && this._client.process && this._client.process.exitCode !== null) {
+            this._client = null;
+            this._startPromise = null;
+        }
+
         if (this._startPromise) {
             return this._startPromise;
         }
@@ -196,14 +203,25 @@ module.exports = function (RED) {
                     return;
                 }
                 if (result.access_token) {
+                    // Store token in session so the poll response can return it to the
+                    // browser, which will then write it into the credential form field.
+                    // This is the reliable persistence path: Node-RED's normal credential
+                    // save flow (triggered by clicking Done) includes the field value and
+                    // encrypts+saves it to disk, surviving restarts and subsequent deploys.
+                    session.token = result.access_token;
                     if (nodeId) {
                         const configNode = RED.nodes.getNode(nodeId);
                         if (configNode) {
+                            // Also update in-memory credentials so the node can use the
+                            // token immediately without waiting for a save+reload cycle.
                             if (!configNode.credentials) configNode.credentials = {};
                             configNode.credentials.githubToken = result.access_token;
-                            // Reset client so next use picks up the new token
+                            RED.nodes.addCredentials(nodeId, { githubToken: result.access_token });
+                            // Reset client and models cache so next use picks up the new token
                             configNode._client = null;
                             configNode._startPromise = null;
+                            configNode._modelsCache = null;
+                            configNode._modelsCacheAt = 0;
                         }
                     }
                     session.done = true;
@@ -232,7 +250,10 @@ module.exports = function (RED) {
             clearTimeout(session.ttlTimer);
             loginSessions.delete(req.params.sessionId);
         }
-        res.json({ done: session.done, error: session.error || null });
+        // Return the token on success so the browser can persist it via the
+        // normal Node-RED credential form flow (set into the password field,
+        // saved when user clicks Done).
+        res.json({ done: session.done, error: session.error || null, token: session.token || null });
     });
 
     // Admin endpoint: GET /copilot/models?configId=<id>
@@ -260,6 +281,19 @@ module.exports = function (RED) {
         } catch (err) {
             res.status(500).json({ error: err.message });
         }
+    });
+
+    // POST /copilot/models/refresh?configId=<id>
+    // Busts the models cache so the next GET /copilot/models fetches fresh data.
+    // Called by the Refresh button in the prompt node editor.
+    RED.httpAdmin.post('/copilot/models/refresh', RED.auth.needsPermission('copilot-config.write'), (req, res) => {
+        const configNode = RED.nodes.getNode(req.query.configId);
+        if (!configNode) {
+            return res.status(404).json({ error: 'Config node not found' });
+        }
+        configNode._modelsCache = null;
+        configNode._modelsCacheAt = 0;
+        res.json({ ok: true });
     });
 };
 

@@ -48,6 +48,14 @@
                 loadModels($(this).val());
             });
 
+            // Refresh button reloads the model list (bust cache, then reload)
+            $('#copilot-model-refresh').on('click', function () {
+                const configId = $('#node-input-copilotConfig').val();
+                if (!configId) return;
+                $.post(`copilot/models/refresh?configId=${encodeURIComponent(configId)}`)
+                    .always(function () { loadModels(configId); });
+            });
+
             // Initial load using the already-selected config node
             loadModels($('#node-input-copilotConfig').val());
         },
@@ -65,9 +73,12 @@
     </div>
     <div class="form-row">
         <label for="node-input-model"><i class="fa fa-microchip"></i> Model</label>
-        <select id="node-input-model" style="width:70%">
+        <select id="node-input-model" style="width:calc(70% - 34px)">
             <option value="">— select a config first —</option>
         </select>
+        <button type="button" id="copilot-model-refresh" class="red-ui-button" style="margin-left:4px" title="Refresh model list">
+            <i class="fa fa-refresh"></i>
+        </button>
     </div>
     <div class="form-row">
         <label for="node-input-reasoningEffort"><i class="fa fa-brain"></i> Reasoning</label>
