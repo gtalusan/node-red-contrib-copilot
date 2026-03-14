@@ -332,14 +332,16 @@ describe('copilot-config node', function () {
     });
 
     describe('POST /copilot/auth/start and GET /copilot/auth/poll', function () {
-        // Build a mock _httpPost.fn that returns deviceCodeResponse on the first call,
-        // then cycles through tokenResponses for subsequent (polling) calls.
+        // Build a mock _httpPost.fn that routes by URL so that stale background
+        // polling loops from earlier tests don't consume the device-code slot.
         function buildHttpPostMock(deviceCodeResponse, tokenResponses) {
-            let callCount = 0;
-            return function mockHttpPost(_url, _params) {
-                const idx = callCount++;
-                if (idx === 0) return Promise.resolve(deviceCodeResponse);
-                const resp = tokenResponses[idx - 1] || { error: 'expired_token', error_description: 'expired' };
+            let pollCount = 0;
+            return function mockHttpPost(url, _params) {
+                if (url.includes('device/code')) {
+                    return Promise.resolve(deviceCodeResponse);
+                }
+                // Token polling endpoint
+                const resp = tokenResponses[pollCount++] || { error: 'expired_token', error_description: 'expired' };
                 return Promise.resolve(resp);
             };
         }
@@ -384,19 +386,26 @@ describe('copilot-config node', function () {
                 helper.request().post('/copilot/auth/start').send({ nodeId: 'cfg1' }).end(function (err, startRes) {
                     if (err) return done(err);
                     const sessionId = startRes.body.sessionId;
-                    // Wait for the async polling loop to complete (interval=0 → near-instant)
-                    setTimeout(function () {
+                    // Retry polling until done=true (background loop uses 0-ms timers)
+                    let attempts = 0;
+                    function poll() {
                         helper.request()
                             .get('/copilot/auth/poll/' + sessionId)
-                            .expect(200)
                             .end(function (err2, pollRes) {
                                 if (err2) return done(err2);
-                                pollRes.body.should.have.property('done', true);
-                                pollRes.body.should.have.property('error', null);
-                                pollRes.body.should.have.property('token', 'gho_test_token');
-                                done();
+                                if (pollRes.status === 404 || !pollRes.body.done) {
+                                    if (++attempts > 20) return done(new Error('poll never returned done'));
+                                    return setTimeout(poll, 50);
+                                }
+                                try {
+                                    pollRes.body.should.have.property('done', true);
+                                    pollRes.body.should.have.property('error', null);
+                                    pollRes.body.should.have.property('token', 'gho_test_token');
+                                    done();
+                                } catch (e) { done(e); }
                             });
-                    }, 100);
+                    }
+                    setTimeout(poll, 50);
                 });
             });
         });

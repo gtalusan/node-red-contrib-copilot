@@ -73,8 +73,28 @@ module.exports = function (RED) {
 
         // Map of conversationId → { session, timer|null }
         this._sessions = new Map();
+        this._statusTimer = null; // clears the green "done" status after 15 s
 
         const node = this;
+
+        function setStatus(fill, shape, text, autoClearMs) {
+            clearTimeout(node._statusTimer);
+            node._statusTimer = null;
+            node.status({ fill, shape, text });
+            if (autoClearMs) {
+                node._statusTimer = setTimeout(() => node.status({}), autoClearMs);
+            }
+        }
+
+        // Show yellow "auth required" if the config node has no token yet.
+        // Runs after a short delay so config nodes have time to fully register.
+        function checkAuthStatus() {
+            const cfg = RED.nodes.getNode(node.configNodeId);
+            if (cfg && !cfg.hasToken()) {
+                setStatus('yellow', 'ring', 'auth required');
+            }
+        }
+        setTimeout(checkAuthStatus, 500);
 
         // Destroy a single session entry and clear its idle timer.
         async function destroySession(key) {
@@ -91,10 +111,11 @@ module.exports = function (RED) {
             return setTimeout(() => destroySession(key), node.sessionTimeoutMs);
         }
 
-        this.on('close', async (done) => {
+        this.on('close', async (doneCb) => {
+            clearTimeout(node._statusTimer);
             const keys = [...node._sessions.keys()];
             await Promise.all(keys.map(destroySession));
-            done();
+            doneCb();
         });
 
         this.on('input', async function (msg, send, done) {
@@ -108,17 +129,25 @@ module.exports = function (RED) {
             // msg.reset = true: destroy the session and swallow the message
             if (msg.reset) {
                 await destroySession(convKey);
-                node.status({ fill: 'grey', shape: 'ring', text: 'reset' });
+                setStatus('grey', 'ring', 'reset', 15000);
                 return done();
             }
 
-            node.status({ fill: 'blue', shape: 'dot', text: 'sending…' });
+            setStatus('blue', 'dot', 'sending…');
 
             // --- Resolve config node ---
             const configNode = RED.nodes.getNode(node.configNodeId);
             if (!configNode) {
-                node.status({ fill: 'red', shape: 'ring', text: 'no config' });
+                setStatus('red', 'ring', 'no config');
                 const err = new Error('copilot-prompt: no copilot-config node configured');
+                send([null, { payload: err.message, error: err, _msgid: msg._msgid }]);
+                return done();
+            }
+
+            // Fast-fail with yellow if no auth token — avoids waiting 60 s for SDK timeout
+            if (!configNode.hasToken()) {
+                setStatus('yellow', 'ring', 'auth required');
+                const err = new Error('copilot-prompt: no authentication token configured');
                 send([null, { payload: err.message, error: err, _msgid: msg._msgid }]);
                 return done();
             }
@@ -197,7 +226,7 @@ module.exports = function (RED) {
                 cleanupTempFiles(tempFiles);
 
                 const responseText = response ? response.data.content : '';
-                node.status({ fill: 'green', shape: 'dot', text: 'done' });
+                setStatus('green', 'dot', 'done', 15000);
 
                 msg.payload = responseText;
                 msg.conversationId = convKey;
@@ -208,7 +237,7 @@ module.exports = function (RED) {
                 cleanupTempFiles(tempFiles);
                 // On error, discard the session so the next message starts fresh
                 await destroySession(convKey);
-                node.status({ fill: 'red', shape: 'ring', text: 'error' });
+                setStatus('red', 'ring', err.message || 'error');
                 send([null, { payload: err.message, error: err, _msgid: msg._msgid }]);
                 done();
             }

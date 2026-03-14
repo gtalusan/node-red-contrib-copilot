@@ -73,7 +73,15 @@ function resolveBundledCliPath() {
 
 const BUNDLED_CLI_PATH = resolveBundledCliPath();
 
+// Module-level session map so all route handler closures (which accumulate on
+// the same httpAdmin express app across multiple helper.load calls in tests)
+// always reference the same live Map rather than stale per-factory closures.
+const loginSessions = new Map();
+
 module.exports = function (RED) {
+    // Clear any sessions left over from a previous module load (test isolation).
+    // In production this factory is called once; in tests it's called per-load.
+    loginSessions.clear();
     function CopilotConfigNode(config) {
         RED.nodes.createNode(this, config);
         this.authMethod = config.authMethod || 'oauth'; // 'oauth' | 'token'
@@ -100,6 +108,15 @@ module.exports = function (RED) {
             done();
         });
     }
+
+    /**
+     * Returns true if a GitHub token is available for authentication.
+     * Used by copilot-prompt to fast-fail with a yellow status instead of
+     * waiting 60 s for the SDK timeout.
+     */
+    CopilotConfigNode.prototype.hasToken = function () {
+        return !!(this.credentials && this.credentials.githubToken);
+    };
 
     /**
      * Returns a started CopilotClient, creating and starting it on first call.
@@ -157,10 +174,6 @@ module.exports = function (RED) {
 
     const MODELS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
-    // In-progress login sessions keyed by a random session ID.
-    // Cleaned up when polled after completion, or after a 10-minute TTL.
-    const loginSessions = new Map();
-
     // POST /copilot/auth/start
     // Starts a GitHub device-flow OAuth session, returning the URL and code
     // for the user to visit. Token polling runs in the background; when the
@@ -190,6 +203,8 @@ module.exports = function (RED) {
             let pollDelay = interval * 1000;
             while (Date.now() < deadline) {
                 await new Promise(r => setTimeout(r, pollDelay).unref());
+                // If the session was evicted (e.g., module reloaded in tests), stop.
+                if (!loginSessions.has(sessionId)) return;
                 let result;
                 try {
                     result = await _httpPost.fn(GITHUB_TOKEN_URL, {

@@ -465,4 +465,37 @@ describe('copilot-prompt node', function () {
             n.receive({ payload: 'will fail' });
         });
     });
+
+    // ---- Status indicator behaviour ----
+
+    it('green "done" status auto-clears: _statusTimer is set after success', function (done) {
+        const session = buildSession();
+        buildClientInstance(session);
+        helper.load([copilotConfigModule, copilotPromptModule], buildFlow(), { cfg1: { githubToken: 'tok' } }, function () {
+            const n = helper.getNode('n1');
+            const out = helper.getNode('out1');
+            out.on('input', function () {
+                // A non-null timer means the auto-clear setTimeout was scheduled
+                (n._statusTimer !== null).should.be.true();
+                done();
+            });
+            n.receive({ payload: 'hello' });
+        });
+    });
+
+    it('routes to output 2 when config node has no token', function (done) {
+        buildClientInstance(buildSession());
+        // Load with no credentials — hasToken() returns false
+        helper.load([copilotConfigModule, copilotPromptModule], buildFlow(), {}, function () {
+            const n = helper.getNode('n1');
+            const err = helper.getNode('err1');
+            err.on('input', function (msg) {
+                try {
+                    msg.should.have.property('error');
+                    done();
+                } catch (e) { done(e); }
+            });
+            n.receive({ payload: 'hello' });
+        });
+    });
 });
