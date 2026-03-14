@@ -36,7 +36,7 @@
     }
   },
   "dependencies": {
-    "@github/copilot-sdk": "0.1.30",
+    "@github/copilot-sdk": "0.1.32",
     "file-type": "^21.3.2"
   },
   "devDependencies": {
