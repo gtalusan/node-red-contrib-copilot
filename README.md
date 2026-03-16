@@ -108,8 +108,10 @@ Sends a prompt to GitHub Copilot and emits the response.
 |----------|------|-------------|
 | `msg.payload` | `string` | Plain string used as the prompt |
 | `msg.payload` | `object` | `{ prompt: string, attachments: Attachment[] }` |
-| `msg.attachments` | `Attachment[]` | Merged with any attachments in `msg.payload` |
+| `msg.attachments` | `Attachment[]` | Additional attachments merged with any included in `msg.payload` |
 | `msg.model` | `string` | Override the model for this message only |
+| `msg.conversationId` | `string` | Optional conversation key shared between nodes or flows |
+| `msg.reset` | `boolean` | When `true`, destroys the current session for the resolved conversation and stops the message from reaching Copilot |
 
 #### Attachment formats
 
@@ -132,10 +134,19 @@ Sends a prompt to GitHub Copilot and emits the response.
 | Output | Property | Type | Description |
 |--------|----------|------|-------------|
 | **1 — Response** | `msg.payload` | `string` | The assistant's response text |
-| | `msg.sessionId` | `string` | Copilot session ID |
-| | `msg.events` | `array` | All events emitted during the session |
+| | `msg.conversationId` | `string` | Conversation ID used for the message |
+| | `msg.events` | `array` | All events emitted during the Copilot session |
 | **2 — Error** | `msg.payload` | `string` | Error message |
 | | `msg.error` | `Error` | The error object |
+
+#### Session lifecycle
+
+Sessions are created on first use and kept alive between messages so that conversation context is preserved. A session is closed when:
+
+- A message with `msg.reset = true` is received.
+- The session has been idle longer than the configured **Session idle** timeout (default 30 minutes; set to `0` to disable).
+- An error occurs — the session is discarded so the next message starts fresh.
+- The node is redeployed or Node-RED shuts down.
 
 #### Node configuration
 
@@ -145,6 +156,8 @@ Sends a prompt to GitHub Copilot and emits the response.
 | **Model** | Dynamically populated from the API — shows token cost multiplier, e.g. `claude-haiku-4.5 (0x)` |
 | **Reasoning** | Reasoning effort hint: `low`, `medium`, `high`, `xhigh` (model-dependent) |
 | **Timeout** | Request timeout in milliseconds (default: 60,000) |
+| **Conv. ID** | Optional identifier for sharing a conversation thread (defaults to the node ID when blank) |
+| **Session idle (min)** | Idle timeout in minutes before sessions are discarded (set `0` to disable; default 30) |
 
 ---
 
@@ -202,7 +215,7 @@ docker restart nodered
 
 | Package | Role |
 |---------|------|
-| [`@github/copilot-sdk`](https://www.npmjs.com/package/@github/copilot-sdk) `0.1.30` | Copilot client — session management, model listing, prompt dispatch |
+| [`@github/copilot-sdk`](https://www.npmjs.com/package/@github/copilot-sdk) `0.1.32` | Copilot client — session management, model listing, prompt dispatch |
 | [`@github/copilot`](https://www.npmjs.com/package/@github/copilot) | Copilot CLI binary (bundled, installed transitively via the SDK) |
 
 ---
