@@ -1,6 +1,6 @@
 {
   "name": "@george.talusan/node-red-contrib-copilot",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "Node-RED nodes for GitHub Copilot via @github/copilot-sdk",
   "license": "ISC",
   "author": "George Talusan",
