@@ -498,4 +498,25 @@ describe('copilot-prompt node', function () {
             n.receive({ payload: 'hello' });
         });
     });
+
+    it('passes gitHubToken to session config for per-session authentication (0.3.0+)', function (done) {
+        const session = buildSession();
+        buildClientInstance(session);
+        helper.load([copilotConfigModule, copilotPromptModule], buildFlow(), { cfg1: { githubToken: 'ghp_test123' } }, function () {
+            const n = helper.getNode('n1');
+            const out = helper.getNode('out1');
+            out.on('input', function () {
+                try {
+                    // Get the client's createSession call
+                    const client = mockState.currentInstance;
+                    client.createSession.calledOnce.should.be.true();
+                    const sessionConfig = client.createSession.firstCall.args[0];
+                    // Verify gitHubToken is passed to session config
+                    sessionConfig.should.have.property('gitHubToken', 'ghp_test123');
+                    done();
+                } catch (e) { done(e); }
+            });
+            n.receive({ payload: 'hello' });
+        });
+    });
 });

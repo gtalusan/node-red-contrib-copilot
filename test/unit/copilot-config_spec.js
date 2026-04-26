@@ -66,7 +66,7 @@ describe('copilot-config node', function () {
             await n.getClient();
             const opts = mockState.constructorArgs[0];
             opts.should.have.property('useLoggedInUser', true);
-            opts.should.not.have.property('githubToken');
+            opts.should.not.have.property('gitHubToken');
             done();
         });
     });
@@ -93,7 +93,7 @@ describe('copilot-config node', function () {
             const n = helper.getNode('cfg1');
             await n.getClient();
             const opts = mockState.constructorArgs[0];
-            opts.should.have.property('githubToken', 'gho_fromOAuthFlow');
+            opts.should.have.property('gitHubToken', 'gho_fromOAuthFlow');
             opts.should.have.property('useLoggedInUser', false);
             done();
         });
@@ -108,7 +108,7 @@ describe('copilot-config node', function () {
             await n.getClient();
             const opts = mockState.constructorArgs[0];
             opts.should.have.property('useLoggedInUser', false);
-            opts.should.not.have.property('githubToken');
+            opts.should.not.have.property('gitHubToken');
             done();
         });
     });
@@ -121,7 +121,7 @@ describe('copilot-config node', function () {
             const client = await n.getClient();
             mockState.constructorArgs.length.should.equal(1);
             const opts = mockState.constructorArgs[0];
-            opts.should.have.property('githubToken', 'ghp_abc123');
+            opts.should.have.property('gitHubToken', 'ghp_abc123');
             opts.should.have.property('useLoggedInUser', false);
             inst.start.calledOnce.should.be.true();
             client.should.equal(inst);

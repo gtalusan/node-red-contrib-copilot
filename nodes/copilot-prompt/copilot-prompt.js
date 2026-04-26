@@ -208,6 +208,10 @@ module.exports = function (RED) {
                     const { approveAll } = await import('@github/copilot-sdk');
                     const sessionConfig = { model, onPermissionRequest: approveAll };
                     if (node.reasoningEffort) sessionConfig.reasoningEffort = node.reasoningEffort;
+                    // Pass gitHubToken to session config for per-session authentication (0.3.0+)
+                    if (configNode.credentials && configNode.credentials.githubToken) {
+                        sessionConfig.gitHubToken = configNode.credentials.githubToken;
+                    }
                     session = await client.createSession(sessionConfig);
                     const timer = armTimer(convKey);
                     node._sessions.set(convKey, { session, timer });

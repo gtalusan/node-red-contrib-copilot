@@ -142,7 +142,7 @@ module.exports = function (RED) {
         const token = this.credentials && this.credentials.githubToken;
         if (token) {
             // Token from OAuth flow or PAT — takes priority, disables logged-in user auth
-            options.githubToken = token;
+            options.gitHubToken = token;
             options.useLoggedInUser = false;
         } else {
             // No token configured: try stored CLI credentials (oauth mode) or fail (token mode)
